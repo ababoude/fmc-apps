@@ -20,9 +20,11 @@ pub const MAX_FALL: i32 = 2600;
 pub const GATE_W: i32 = 52; // the pipe sprite's width
 pub const SPACING: i32 = 230;
 pub const GATES: usize = 3;
+/// The ground's top edge: the bird's wall at the bottom, and where the pipes end.
+pub const GROUND_Y: i32 = 388;
 pub const GAP_START: i32 = 160;
 pub const GAP_MIN: i32 = 120;
-pub const GAP_SWING: i32 = 100;
+pub const GAP_SWING: i32 = 70;
 pub const GAP_STEP: i32 = 70;
 /// Where the first gate enters, just off the right edge.
 pub const FIRST_X: i32 = SIZE + 40;
@@ -194,12 +196,12 @@ impl Game {
         out
     }
 
-    /// Out of the round screen, or touching a gate.
+    /// Out of the round screen, on the ground, or touching a gate.
     pub fn crashed(&self) -> bool {
         let (x, y) = (HOP_X, self.hop_y());
         let (dx, dy) = (x - C, y - C);
         let reach = C - R - 2;
-        if dx * dx + dy * dy > reach * reach {
+        if dx * dx + dy * dy > reach * reach || y + R >= GROUND_Y {
             return true;
         }
         self.gates.iter().any(|g| hits(x, y, R, g.x, i32::MIN / 2, GATE_W, g.top) || hits(x, y, R, g.x, g.bottom, GATE_W, i32::MAX / 2))

@@ -95,9 +95,6 @@ w, h, img = png(f"{d}/message.png"); emit("message", w, h - 80, rects(img, 0, 80
 w, h, img = png(f"{d}/pipe-green.png")
 cap = 26  # rows 0..25: the wider cap and its dark lower edge; below it the shaft only varies by faint noise
 print(f"pub const PIPE_W: i32 = {w};\npub const PIPE_CAP_H: i32 = {cap};\n")
-# The cap's rounded corners and the shaft's margins are black, not transparent: the pipe moves in steps and must
-# cover what the last step left there.
-img = [[0 if c is None else c for c in row] for row in img]
 emit("pipe_cap", w, cap, rects(img, 0, 0, w, cap))
 body = rects([img[160]], 0, 0, w, 1)
 emit("pipe_body", w, 1, body)
@@ -109,3 +106,7 @@ sky = img[0][0]
 top = next(y for y in range(h) if img[y][0] != sky or len(set(img[y])) > 1)
 print(f"pub const SKY: u16 = 0x{sky:04X};\n")
 emit("band", w, h - top, rects(img, 0, top, w, h))
+
+# The ground, only the rows that are on the screen (the game puts it at y 388 of 466); drawn twice side by side.
+w, h, img = png(f"{d}/base.png")
+emit("ground", w, 78, rects(img, 0, 0, w, 78))

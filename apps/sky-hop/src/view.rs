@@ -3,17 +3,18 @@
 // where it can help it (section 2 of the app guide). The sprites (src/sprites.rs) are lists of rects: the Surface
 // has no blit.
 
-use crate::game::{C, GATE_W, Game, Gate, HOP_X, SIZE, State};
+use crate::game::{C, GATE_W, GROUND_Y, Game, Gate, HOP_X, SIZE, State};
 use crate::sprites::{self, PIPE_BODY, PIPE_CAP, PIPE_CAP_H, Sprite};
 use cmf_wp2_ui::Rgb;
 use cmf_wp2_ui::Surface;
 use cmf_wp2_ui::draw::rrect;
 use cmf_wp2_ui::text::{big, big_width, centre, int};
 
-pub const BLACK: Rgb = Rgb(0, 0, 0);
 pub const PANEL: Rgb = Rgb(22, 22, 30);
 const GREY: u16 = 0x8C71;
-const TITLE_COLOR: u16 = 0xFCA5; // the bird's orange
+const WHITE: u16 = 0xFFFF;
+/// Text on the scenery.
+const INK: Rgb = Rgb(84, 56, 71);
 
 /// The score's digits sit this far apart, on top of the screen.
 pub const SCORE_Y: i32 = 40;
@@ -100,28 +101,42 @@ fn pipes(s: &mut impl Surface, gt: &Gate) {
     blit_flipped(s, &PIPE_CAP, gt.x, gt.top - PIPE_CAP_H);
     shaft(s, gt.x, 0, gt.top - PIPE_CAP_H);
     blit(s, &PIPE_CAP, gt.x, gt.bottom);
-    shaft(s, gt.x, gt.bottom + PIPE_CAP_H, SIZE - gt.bottom - PIPE_CAP_H);
+    shaft(s, gt.x, gt.bottom + PIPE_CAP_H, GROUND_Y - gt.bottom - PIPE_CAP_H);
 }
 
-/// The background of a box: black, then the parts of gates in it.
+/// The scenery in a box: sky, the town and grass, the ground. Every pixel of the box once.
+fn scenery(s: &mut impl Surface, x0: i32, y0: i32, w: i32, h: i32) {
+    let band_y = GROUND_Y - sprites::BAND.h;
+    let mut clip = Clip { s, x0, y0, x1: x0 + w, y1: y0 + h };
+    clip.rect(0, 0, SIZE, band_y, sprites::SKY);
+    for x in [0, sprites::BAND.w] {
+        blit(&mut clip, &sprites::BAND, x, band_y);
+    }
+    for x in [0, sprites::GROUND.w] {
+        blit(&mut clip, &sprites::GROUND, x, GROUND_Y);
+    }
+}
+
+/// The background of a box: the scenery, then the parts of gates in it.
 fn background(s: &mut impl Surface, g: &Game, x0: i32, y0: i32, w: i32, h: i32) {
-    s.rect(x0, y0, w, h, BLACK.rgb565());
+    scenery(s, x0, y0, w, h);
     let mut clip = Clip { s, x0, y0, x1: x0 + w, y1: y0 + h };
     for gt in &g.gates {
         pipes(&mut clip, gt);
     }
 }
 
-/// A gate at its new place; with `from`, also erase the strip it left behind on the right.
+/// A gate at its new place; with `from`, the strip it left behind on the right gets the scenery back first.
 fn gate(s: &mut impl Surface, gt: &Gate, from: Option<i32>) {
     if gt.x >= SIZE && from.is_none_or(|x| x >= SIZE) {
         return;
     }
-    pipes(s, gt);
     if let Some(old) = from {
-        let x0 = (gt.x + GATE_W).max(old);
-        s.rect(x0, 0, old + GATE_W - x0, SIZE, BLACK.rgb565());
+        // What the pipe left behind, and its two margin columns that the sprite does not paint.
+        let x0 = gt.x + GATE_W - 2;
+        scenery(s, x0, 0, old + GATE_W - x0, SIZE);
     }
+    pipes(s, gt);
 }
 
 fn bird(wing: usize) -> &'static Sprite {
@@ -159,31 +174,31 @@ fn score(s: &mut impl Surface, g: &Game, clear: bool) {
     digits(s, text, C, SCORE_Y);
 }
 
-fn best_line(s: &mut impl Surface, y: i32, best: u32) {
+fn best_line(s: &mut impl Surface, y: i32, best: u32, c: u16) {
     let mut buf = [0u8; 11];
     let mut line = [0u8; 16];
     let n = int(best as i32, &mut buf).as_bytes();
     line[..5].copy_from_slice(b"BEST ");
     line[5..5 + n.len()].copy_from_slice(n);
-    centre(s, C, y, core::str::from_utf8(&line[..5 + n.len()]).unwrap_or("?"), GREY);
+    centre(s, C, y, core::str::from_utf8(&line[..5 + n.len()]).unwrap_or("?"), c);
 }
 
 fn ready(s: &mut impl Surface, best: u32) {
     const TITLE: &str = "SKY HOP";
-    big(s, C - big_width(TITLE, 4) / 2, 112, TITLE, 4, TITLE_COLOR);
+    big(s, C - big_width(TITLE, 4) / 2, 112, TITLE, 4, WHITE);
     // Right of the hovering bird; at these rows the round screen is wide enough for it.
     blit(s, &sprites::MESSAGE, 200, 180);
     if best > 0 {
-        best_line(s, 400, best);
+        best_line(s, 424, best, INK.rgb565());
     }
 }
 
 fn over(s: &mut impl Surface, g: &Game, best: u32) {
-    rrect(s, C - 140, 150, 280, 170, 28, PANEL, BLACK);
+    rrect(s, C - 140, 150, 280, 170, 28, PANEL, Rgb(78, 192, 202));
     blit(s, &sprites::GAMEOVER, C - sprites::GAMEOVER.w / 2, 162);
     let mut buf = [0u8; 11];
     digits(s, int(g.score as i32, &mut buf), C, 212);
-    best_line(s, 262, best);
+    best_line(s, 262, best, GREY);
     centre(s, C, 290, "TAP TO RETRY", GREY);
 }
 
@@ -193,7 +208,7 @@ pub fn frame(s: &mut impl Surface, g: &Game, best: u32, prev: Option<Seen>) -> S
     let prev = prev.filter(|p| p.state == g.state);
     match prev {
         None => {
-            s.rect(0, 0, SIZE, SIZE, BLACK.rgb565());
+            scenery(s, 0, 0, SIZE, SIZE);
             for gt in &g.gates {
                 gate(s, gt, None);
             }
@@ -287,7 +302,10 @@ mod tests {
         let fb_at = |x: i32, y: i32| px[(y * SIZE + x) as usize];
         let (rx, ry, _, _, c) = bird(g.wing()).rects[0];
         assert_eq!(fb_at(HOP_X - BIRD_W / 2 + rx as i32, g.hop_y() - BIRD_H / 2 + ry as i32), c);
-        assert_eq!(fb_at(HOP_X - BIRD_W, g.hop_y()), BLACK.rgb565());
+        let mut bare = screen();
+        scenery(&mut Fb::new(&mut bare), 0, 0, SIZE, SIZE);
+        let (x, y) = (HOP_X - BIRD_W, g.hop_y());
+        assert_eq!(fb_at(x, y), bare[(y * SIZE + x) as usize]);
     }
 
     /// Collects the rects drawn.
@@ -312,8 +330,7 @@ mod tests {
                 assert!(apart, "{a:?} {b:?}");
             }
         }
-        let area: i32 = rects.iter().map(|r| r.2 * r.3).sum();
-        assert_eq!(area, GATE_W * (SIZE - (gt.bottom - gt.top)));
+        assert!(rects.iter().all(|r| r.0 >= gt.x && r.0 + r.2 <= gt.x + GATE_W && r.1 >= 0 && r.1 + r.3 <= GROUND_Y));
         assert_eq!(GATES, 3);
         assert_eq!(sprites::PIPE_W, GATE_W);
     }
