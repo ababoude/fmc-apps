@@ -1,0 +1,120 @@
+# The store pipeline, see README.md ("How an update reaches the store").
+# A pull request: every app it touches must raise its version, and every app it touches is built (all of them
+# when it changes the SDK pin or the build tooling). A push to main publishes the apps whose version went up.
+# By hand (Actions, Store, Run workflow): build the named apps and publish them, a dry run by default.
+name: Store
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: Apps to build and publish, space-separated (empty = all)
+        default: ""
+      dry_run:
+        description: Dry run (the store answers what would change and saves nothing)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# ponytail: one run per ref at a time. A main run still waiting when a newer one queues is cancelled by
+# GitHub; its apps go out by a workflow_dispatch.
+concurrency:
+  group: store-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      apps: ${{ steps.pick.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        name: Pick the apps
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_APPS: ${{ inputs.apps }}
+        run: |
+          case "$EVENT" in
+            pull_request)
+              scripts/store bumps "$PR_BASE"
+              apps=$(scripts/store changed "$PR_BASE") ;;
+            push) apps=$(scripts/store released "$BEFORE") ;;
+            *) apps=${INPUT_APPS:-$(cd apps && ls -d */ | tr -d / | tr '\n' ' ')} ;;
+          esac
+          scripts/store check
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+          echo "Apps: ${apps:-none}"
+
+      - if: steps.pick.outputs.apps
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabi
+          components: llvm-tools
+
+      - if: steps.pick.outputs.apps
+        name: Put resvg on PATH
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/resvg.tar.gz" \
+            https://github.com/linebender/resvg/releases/download/v0.49.0/resvg-linux-x86_64.tar.gz
+          echo "216637e75e909e53e3098b0875cd5f7da2fdc8b4359771b4a29b539afff9d3f5  $RUNNER_TEMP/resvg.tar.gz" | sha256sum -c
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/resvg.tar.gz" -C "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - if: steps.pick.outputs.apps
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps -> ../target
+
+      - if: steps.pick.outputs.apps
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - if: steps.pick.outputs.apps
+        name: Build and test
+        env:
+          APPS: ${{ steps.pick.outputs.apps }}
+        run: |
+          make build APP="$APPS"
+          for app in $APPS; do make test APP="$app"; done
+
+      - if: steps.pick.outputs.apps
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-apps
+          path: |
+            target/*.wp2app
+            target/*-icon.png
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: needs.build.outputs.apps && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: store-apps
+          path: target
+
+      - name: Publish
+        env:
+          APPS: ${{ needs.build.outputs.apps }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          STORE_URL: ${{ vars.STORE_URL }}
+          STORE_PUBLISH_TOKEN: ${{ secrets.STORE_PUBLISH_TOKEN }}
+        run: scripts/store publish $APPS $DRY_RUN
