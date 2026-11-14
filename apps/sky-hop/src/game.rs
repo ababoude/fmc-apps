@@ -8,7 +8,7 @@ pub const C: i32 = SIZE / 2;
 /// Fixed-point one for the critter's height and speed.
 pub const Q: i32 = 256;
 /// The critter: its x never changes, its body is a disc of this radius.
-pub const HOP_X: i32 = 150;
+pub const HOP_X: i32 = C;
 pub const R: i32 = 13;
 /// Per tick², per tick, and the fastest fall per tick (Q).
 pub const GRAVITY: i32 = 140;
