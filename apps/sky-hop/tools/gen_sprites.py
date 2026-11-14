@@ -87,8 +87,13 @@ for i in range(10):
 for n, name in enumerate(['up', 'mid', 'down']):
     w, h, img = png(f"{d}/yellowbird-{name}flap.png"); emit(f"bird_{name}", w, h, rects(img))
 w, h, img = png(f"{d}/gameover.png"); emit("gameover", w, h, rects(img))
-# The title screen without its "FlappyBird" logo (the top rows): "Get Ready!" and the tap hint.
-w, h, img = png(f"{d}/message.png"); emit("message", w, h - 80, rects(img, 0, 80, w, h))
+# The pieces of the title screen that we use, cropped to their box: "Get Ready!" and the tap hint. Left out: the
+# "FlappyBird" logo and the grey bird with its arrow (the game has its own bird).
+w, h, img = png(f"{d}/message.png")
+for name, y0, y1 in [("get_ready", 102, 152), ("tap_hint", 231, 267)]:
+    xs = [x for row in img[y0:y1] for x, c in enumerate(row) if c is not None]
+    x0, x1 = min(xs), max(xs) + 1
+    emit(name, x1 - x0, y1 - y0, rects(img, x0, y0, x1, y1))
 
 # The pipe: a cap on top of a shaft. The cap is rects; the shaft is one representative row that the view stretches
 # to any length.

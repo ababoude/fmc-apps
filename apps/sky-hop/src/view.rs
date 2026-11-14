@@ -185,9 +185,9 @@ fn best_line(s: &mut impl Surface, y: i32, best: u32, c: u16) {
 
 fn ready(s: &mut impl Surface, best: u32) {
     const TITLE: &str = "SKY HOP";
-    big(s, C - big_width(TITLE, 4) / 2, 112, TITLE, 4, WHITE);
-    // Right of the hovering bird; at these rows the round screen is wide enough for it.
-    blit(s, &sprites::MESSAGE, 200, 180);
+    big(s, C - big_width(TITLE, 4) / 2, 72, TITLE, 4, WHITE);
+    blit(s, &sprites::GET_READY, C - sprites::GET_READY.w / 2, 124);
+    blit(s, &sprites::TAP_HINT, C - sprites::TAP_HINT.w / 2, 296);
     if best > 0 {
         best_line(s, 424, best, INK.rgb565());
     }
