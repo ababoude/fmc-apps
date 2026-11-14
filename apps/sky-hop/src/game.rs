@@ -17,7 +17,7 @@ pub const MAX_FALL: i32 = 2600;
 
 /// Gates: width, distance from one gate's left edge to the next one's, gap height, how far the gap's centre may
 /// sit from the screen's centre line and how far it may move from one gate to the next.
-pub const GATE_W: i32 = 64;
+pub const GATE_W: i32 = 52; // the pipe sprite's width
 pub const SPACING: i32 = 230;
 pub const GATES: usize = 3;
 pub const GAP_START: i32 = 160;
@@ -136,6 +136,11 @@ impl Game {
     /// Centre of the critter in px.
     pub fn hop_y(&self) -> i32 {
         (self.y + Q / 2).div_euclid(Q)
+    }
+
+    /// Which of the bird's three wing frames to show: up 0, middle 1, down 2. A flapping cycle, folded when it crashed.
+    pub fn wing(&self) -> usize {
+        if self.state == State::Over { 2 } else { [1, 0, 1, 2][(self.tick / 3 % 4) as usize] }
     }
 
     /// A tap or a crown detent. Ready: starts the run. Over: does nothing (the app decides when to restart).

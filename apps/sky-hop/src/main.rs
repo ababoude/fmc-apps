@@ -3,6 +3,8 @@
 #[cfg_attr(not(any(target_os = "none", wp2_sim)), allow(dead_code))]
 mod game;
 #[cfg_attr(not(any(target_os = "none", wp2_sim)), allow(dead_code))]
+mod sprites;
+#[cfg_attr(not(any(target_os = "none", wp2_sim)), allow(dead_code))]
 mod view;
 
 #[cfg(not(any(target_os = "none", wp2_sim)))]

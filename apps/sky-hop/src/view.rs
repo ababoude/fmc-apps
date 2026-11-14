@@ -1,81 +1,114 @@
 // Drawing, through cmf-wp2-ui's Surface: the watch draws with `&Api`, the tests with `Fb`. One buffer and no
 // double buffering, so each frame repaints only what moved and never paints a pixel twice in different colours
-// where it can help it (section 2 of the app guide).
+// where it can help it (section 2 of the app guide). The sprites (src/sprites.rs) are lists of rects: the Surface
+// has no blit.
 
-use crate::game::{C, GATE_W, Game, Gate, HOP_X, R, SIZE, State};
+use crate::game::{C, GATE_W, Game, Gate, HOP_X, SIZE, State};
+use crate::sprites::{self, PIPE_BODY, PIPE_CAP, PIPE_CAP_H, Sprite};
 use cmf_wp2_ui::Rgb;
 use cmf_wp2_ui::Surface;
-use cmf_wp2_ui::draw::{Band, Paint, radial_n, rrect};
+use cmf_wp2_ui::draw::rrect;
 use cmf_wp2_ui::text::{big, big_width, centre, int};
 
 pub const BLACK: Rgb = Rgb(0, 0, 0);
-pub const GATE_FILL: Rgb = Rgb(6, 46, 54);
-pub const GATE_EDGE: Rgb = Rgb(34, 211, 238);
-pub const BODY: Rgb = Rgb(255, 150, 40);
-pub const BODY_HIT: Rgb = Rgb(240, 70, 60);
-pub const BEAK: Rgb = Rgb(255, 215, 80);
 pub const PANEL: Rgb = Rgb(22, 22, 30);
-const WHITE: u16 = 0xFFFF;
 const GREY: u16 = 0x8C71;
+const TITLE_COLOR: u16 = 0xFCA5; // the bird's orange
 
-/// Side bars and the caps at the gap.
-const BAR: i32 = 4;
-const CAP: i32 = 6;
-/// The score: font scale 4 (32 px tall), centred on top.
+/// The score's digits sit this far apart, on top of the screen.
 pub const SCORE_Y: i32 = 40;
-const SCORE_SCALE: i32 = 4;
-const SCORE_H: i32 = 8 * SCORE_SCALE;
+const DIGIT_H: i32 = 36;
+const DIGIT_GAP: i32 = 2;
+/// The bird sprite's size, centred on the critter.
+const BIRD_W: i32 = 34;
+const BIRD_H: i32 = 24;
+
+const DIGITS: [&Sprite; 10] = [
+    &sprites::DIGIT0,
+    &sprites::DIGIT1,
+    &sprites::DIGIT2,
+    &sprites::DIGIT3,
+    &sprites::DIGIT4,
+    &sprites::DIGIT5,
+    &sprites::DIGIT6,
+    &sprites::DIGIT7,
+    &sprites::DIGIT8,
+    &sprites::DIGIT9,
+];
 
 /// What was on screen after the last frame.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Seen {
     xs: [i32; crate::game::GATES],
     y: i32,
+    wing: usize,
     score: u32,
     state: State,
 }
 
 pub fn seen(g: &Game) -> Seen {
-    Seen { xs: g.gates.map(|gt| gt.x), y: g.hop_y(), score: g.score, state: g.state }
+    Seen { xs: g.gates.map(|gt| gt.x), y: g.hop_y(), wing: g.wing(), score: g.score, state: g.state }
 }
 
-/// The rects of a gate at `x`, none overlapping: (x, y, w, h, colour).
-fn gate_rects(gt: &Gate, x: i32) -> [(i32, i32, i32, i32, Rgb); 8] {
-    let (top, bottom) = (gt.top - CAP, gt.bottom + CAP);
-    let low = SIZE - bottom;
-    [
-        (x, 0, BAR, top, GATE_EDGE),
-        (x + BAR, 0, GATE_W - 2 * BAR, top, GATE_FILL),
-        (x + GATE_W - BAR, 0, BAR, top, GATE_EDGE),
-        (x, top, GATE_W, CAP, GATE_EDGE),
-        (x, gt.bottom, GATE_W, CAP, GATE_EDGE),
-        (x, bottom, BAR, low, GATE_EDGE),
-        (x + BAR, bottom, GATE_W - 2 * BAR, low, GATE_FILL),
-        (x + GATE_W - BAR, bottom, BAR, low, GATE_EDGE),
-    ]
+/// A surface that drops what falls outside a box, so a part of the picture can be redrawn alone.
+struct Clip<'a, S: Surface> {
+    s: &'a mut S,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
 }
 
-/// What lies under the critter and the score: a gate or the black sky.
-fn under(g: &Game, x: i32, y: i32) -> Rgb {
-    for gt in &g.gates {
-        for (rx, ry, w, h, c) in gate_rects(gt, gt.x) {
-            if x >= rx && x < rx + w && y >= ry && y < ry + h {
-                return c;
-            }
+impl<S: Surface> Surface for Clip<'_, S> {
+    fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u16) {
+        let (ax, ay) = (x.max(self.x0), y.max(self.y0));
+        let (bx, by) = ((x + w).min(self.x1), (y + h).min(self.y1));
+        if bx > ax && by > ay {
+            self.s.rect(ax, ay, bx - ax, by - ay, c);
         }
     }
-    BLACK
+
+    fn text(&mut self, x: i32, y: i32, t: &str, c: u16) {
+        self.s.text(x, y, t, c);
+    }
+}
+
+fn blit(s: &mut impl Surface, sp: &Sprite, x: i32, y: i32) {
+    for &(rx, ry, w, h, c) in sp.rects {
+        s.rect(x + rx as i32, y + ry as i32, w as i32, h as i32, c);
+    }
+}
+
+/// Upside down.
+fn blit_flipped(s: &mut impl Surface, sp: &Sprite, x: i32, y: i32) {
+    for &(rx, ry, w, h, c) in sp.rects {
+        s.rect(x + rx as i32, y + sp.h - (ry as i32 + h as i32), w as i32, h as i32, c);
+    }
+}
+
+/// The shaft of a pipe: one row of the sprite, stretched to `h`.
+fn shaft(s: &mut impl Surface, x: i32, y: i32, h: i32) {
+    if h > 0 {
+        for &(rx, _, w, _, c) in PIPE_BODY.rects {
+            s.rect(x + rx as i32, y, w as i32, h, c);
+        }
+    }
+}
+
+/// Both pipes of a gate, from the top and the bottom of the screen to the gap, covering all `GATE_W` columns.
+fn pipes(s: &mut impl Surface, gt: &Gate) {
+    blit_flipped(s, &PIPE_CAP, gt.x, gt.top - PIPE_CAP_H);
+    shaft(s, gt.x, 0, gt.top - PIPE_CAP_H);
+    blit(s, &PIPE_CAP, gt.x, gt.bottom);
+    shaft(s, gt.x, gt.bottom + PIPE_CAP_H, SIZE - gt.bottom - PIPE_CAP_H);
 }
 
 /// The background of a box: black, then the parts of gates in it.
 fn background(s: &mut impl Surface, g: &Game, x0: i32, y0: i32, w: i32, h: i32) {
     s.rect(x0, y0, w, h, BLACK.rgb565());
+    let mut clip = Clip { s, x0, y0, x1: x0 + w, y1: y0 + h };
     for gt in &g.gates {
-        for (x, y, rw, rh, c) in gate_rects(gt, gt.x) {
-            let (ax, ay) = (x.max(x0), y.max(y0));
-            let (bx, by) = ((x + rw).min(x0 + w), (y + rh).min(y0 + h));
-            s.rect(ax, ay, bx - ax, by - ay, c.rgb565());
-        }
+        pipes(&mut clip, gt);
     }
 }
 
@@ -84,35 +117,46 @@ fn gate(s: &mut impl Surface, gt: &Gate, from: Option<i32>) {
     if gt.x >= SIZE && from.is_none_or(|x| x >= SIZE) {
         return;
     }
-    for (x, y, w, h, c) in gate_rects(gt, gt.x) {
-        s.rect(x, y, w, h, c.rgb565());
-    }
+    pipes(s, gt);
     if let Some(old) = from {
         let x0 = (gt.x + GATE_W).max(old);
         s.rect(x0, 0, old + GATE_W - x0, SIZE, BLACK.rgb565());
     }
 }
 
-/// The critter at its height; `from`: its last height, whose box gets the background back in the same pass.
+fn bird(wing: usize) -> &'static Sprite {
+    [&sprites::BIRD_UP, &sprites::BIRD_MID, &sprites::BIRD_DOWN][wing.min(2)]
+}
+
+/// The bird at its height; `from`: its last height, whose box gets the background back in the same pass.
 fn critter(s: &mut impl Surface, g: &Game, from: Option<i32>) {
     let y = g.hop_y();
     let (lo, hi) = from.map_or((y, y), |f| (f.min(y), f.max(y)));
-    let body = if g.state == State::Over { BODY_HIT } else { BODY };
-    let clear = [HOP_X - R - 2, lo - R - 2, HOP_X + R + 7, hi + R + 3];
-    radial_n::<1>(s, HOP_X, y, &[Band { r: R, paint: Paint::Solid(body), soft: 1 }], Some(clear), |x, y| under(g, x, y));
-    s.rect(HOP_X + R - 2, y - 1, 7, 5, BEAK.rgb565());
-    s.rect(HOP_X + 3, y - 8, 6, 6, WHITE);
-    let pupil = if g.state == State::Over { (HOP_X + 4, y - 7) } else { (HOP_X + 6, y - 6) };
-    s.rect(pupil.0, pupil.1, 3, 3, BLACK.rgb565());
+    background(s, g, HOP_X - BIRD_W / 2, lo - BIRD_H / 2, BIRD_W, hi - lo + BIRD_H);
+    blit(s, bird(g.wing()), HOP_X - BIRD_W / 2, y - BIRD_H / 2);
+}
+
+fn number_width(text: &str) -> i32 {
+    text.len() as i32 * (24 + DIGIT_GAP) - DIGIT_GAP - text.bytes().filter(|&b| b == b'1').count() as i32 * 8
+}
+
+/// `text` (digits) in the sprite digits, centred on `cx`.
+fn digits(s: &mut impl Surface, text: &str, cx: i32, y: i32) {
+    let mut x = cx - number_width(text) / 2;
+    for d in text.bytes() {
+        let sp = DIGITS[(d - b'0').min(9) as usize];
+        blit(s, sp, x, y);
+        x += sp.w + DIGIT_GAP;
+    }
 }
 
 fn score(s: &mut impl Surface, g: &Game, clear: bool) {
     let mut buf = [0u8; 11];
     let text = int(g.score as i32, &mut buf);
     if clear {
-        background(s, g, C - 80, SCORE_Y, 160, SCORE_H);
+        background(s, g, C - 80, SCORE_Y, 160, DIGIT_H);
     }
-    big(s, C - big_width(text, SCORE_SCALE) / 2, SCORE_Y, text, SCORE_SCALE, WHITE);
+    digits(s, text, C, SCORE_Y);
 }
 
 fn best_line(s: &mut impl Surface, y: i32, best: u32) {
@@ -126,21 +170,20 @@ fn best_line(s: &mut impl Surface, y: i32, best: u32) {
 
 fn ready(s: &mut impl Surface, best: u32) {
     const TITLE: &str = "SKY HOP";
-    big(s, C - big_width(TITLE, 4) / 2, 112, TITLE, 4, BODY.rgb565());
-    centre(s, C, 316, "TAP TO FLY", WHITE);
+    big(s, C - big_width(TITLE, 4) / 2, 112, TITLE, 4, TITLE_COLOR);
+    // Right of the hovering bird; at these rows the round screen is wide enough for it.
+    blit(s, &sprites::MESSAGE, 200, 180);
     if best > 0 {
-        best_line(s, 346, best);
+        best_line(s, 400, best);
     }
 }
 
 fn over(s: &mut impl Surface, g: &Game, best: u32) {
     rrect(s, C - 140, 150, 280, 170, 28, PANEL, BLACK);
-    const TITLE: &str = "GAME OVER";
-    big(s, C - big_width(TITLE, 3) / 2, 172, TITLE, 3, BODY_HIT.rgb565());
+    blit(s, &sprites::GAMEOVER, C - sprites::GAMEOVER.w / 2, 162);
     let mut buf = [0u8; 11];
-    let text = int(g.score as i32, &mut buf);
-    big(s, C - big_width(text, 6) / 2, 210, text, 6, WHITE);
-    best_line(s, 264, best);
+    digits(s, int(g.score as i32, &mut buf), C, 212);
+    best_line(s, 262, best);
     centre(s, C, 290, "TAP TO RETRY", GREY);
 }
 
@@ -242,14 +285,27 @@ mod tests {
         let g = Game::new(4);
         let px = full(&g, 0);
         let fb_at = |x: i32, y: i32| px[(y * SIZE + x) as usize];
-        assert_eq!(fb_at(HOP_X - 5, g.hop_y() + 5), BODY.rgb565());
-        assert_eq!(fb_at(HOP_X - R - 4, g.hop_y()), BLACK.rgb565());
+        let (rx, ry, _, _, c) = bird(g.wing()).rects[0];
+        assert_eq!(fb_at(HOP_X - BIRD_W / 2 + rx as i32, g.hop_y() - BIRD_H / 2 + ry as i32), c);
+        assert_eq!(fb_at(HOP_X - BIRD_W, g.hop_y()), BLACK.rgb565());
+    }
+
+    /// Collects the rects drawn.
+    struct Rects(Vec<(i32, i32, i32, i32)>);
+
+    impl Surface for Rects {
+        fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, _: u16) {
+            self.0.push((x, y, w, h));
+        }
+        fn text(&mut self, _: i32, _: i32, _: &str, _: u16) {}
     }
 
     #[test]
-    fn gate_parts_do_not_overlap() {
+    fn pipe_parts_cover_the_gate_without_overlap() {
         let gt = Gate { x: 100, top: 150, bottom: 290, ..Game::new(1).gates[0] };
-        let rects = gate_rects(&gt, gt.x);
+        let mut rects = Rects(Vec::new());
+        pipes(&mut rects, &gt);
+        let rects = rects.0;
         for (i, a) in rects.iter().enumerate() {
             for b in &rects[i + 1..] {
                 let apart = a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
@@ -259,5 +315,14 @@ mod tests {
         let area: i32 = rects.iter().map(|r| r.2 * r.3).sum();
         assert_eq!(area, GATE_W * (SIZE - (gt.bottom - gt.top)));
         assert_eq!(GATES, 3);
+        assert_eq!(sprites::PIPE_W, GATE_W);
+    }
+
+    #[test]
+    fn digits_are_as_wide_as_the_sprites() {
+        for text in ["0", "1", "10", "2024", "111"] {
+            let sum: i32 = text.bytes().map(|b| DIGITS[(b - b'0') as usize].w).sum::<i32>() + DIGIT_GAP * (text.len() as i32 - 1);
+            assert_eq!(number_width(text), sum, "{text}");
+        }
     }
 }
