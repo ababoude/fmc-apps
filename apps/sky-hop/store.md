@@ -1,6 +1,6 @@
 A one-touch arcade game. Tap the screen or turn the crown to hop, fall back with gravity, and slip through the gaps
-in the gates. Every gate you pass is a point; the gates speed up and the gaps narrow as the score grows. Touch a gate
-or the edge of the screen and the run is over: tap to go again. Your best score is kept on the watch.
+between the pipes. Every pair you pass is a point; the pipes speed up and the gaps narrow as the score grows. Touch a
+pipe, the ground or the edge of the screen and the run is over: tap to go again. Your best score is kept on the watch.
 
 Press the crown or swipe right to leave.
 
