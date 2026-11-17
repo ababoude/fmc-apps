@@ -22,6 +22,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: ShortcutsWatch.entitlements
 schemes:
   ShortcutsWatch:
     build:
