@@ -14,6 +14,9 @@ on:
       version:
         description: "Version stamped on the .ipa; defaults to the one in store.toml"
         default: ""
+      xcode:
+        description: "Xcode to build with, e.g. 26.2 (empty = image default, iOS 18 SDK)"
+        default: ""
   push:
     branches: [main]
     paths:
@@ -28,7 +31,10 @@ env:
 
 jobs:
   ipa:
-    runs-on: macos-15
+    # macos-15 is arm64 and its hosted pool is often at capacity (GitHub then cancels the job after ~15 min with
+    # "The job was not acquired by Runner of type hosted"). The Intel pool is less contended and runs the same
+    # Xcode toolchain; the .ipa is identical. Switch back to macos-15 only if Intel ever becomes unavailable.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v7
 
@@ -37,6 +43,20 @@ jobs:
           xcodebuild -version
           swift --version
           xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Select Xcode
+        env:
+          XCODE: ${{ inputs.xcode }}
+        run: |
+          # The macos-15 image defaults to Xcode 16.4 (iOS 18 SDK). Pick a newer one to build against iOS 26:
+          # `xcode-select -s /Applications/Xcode_26.2.app`. An unknown version fails here, before the build.
+          if [ -n "$XCODE" ]; then
+            app="/Applications/Xcode_$XCODE.app"
+            [ -d "$app" ] || { echo "::error::Xcode $XCODE is not installed on this image"; ls -d /Applications/Xcode_*.app; exit 1; }
+            sudo xcode-select -s "$app"
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+          fi
 
       - name: Read the version
         id: stamp
