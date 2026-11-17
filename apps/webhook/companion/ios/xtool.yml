@@ -1,0 +1,5 @@
+version: 1
+bundleID: fmc.shortcuts.ShortcutsWatch
+infoPath: Info.plist
+# The same file XcodeGen feeds the asset catalog: one icon, two build systems.
+iconPath: AppIcon.png

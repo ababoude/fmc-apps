@@ -1,0 +1,31 @@
+# XcodeGen: `xcodegen generate` then open ShortcutsWatch.xcodeproj. Hand-editing an .xcodeproj in git is worse.
+name: ShortcutsWatch
+options:
+  bundleIdPrefix: fmc.shortcuts
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  ShortcutsWatch:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        # Swift 5 language mode: CoreBluetooth's delegates are nonisolated but this class is @MainActor, and its
+        # callbacks hand non-Sendable CB objects across actors. In 6.0 those are errors; 5.0 keeps them warnings, so
+        # the first CI build does not fail on concurrency diagnostics you cannot reproduce without a Mac.
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+schemes:
+  ShortcutsWatch:
+    build:
+      targets:
+        ShortcutsWatch: all
+    run:
+      config: Debug

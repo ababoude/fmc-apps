@@ -1,0 +1,219 @@
+# The iPhone companion of apps/webhook, built into an .ipa on a GitHub-hosted macOS runner: no Mac, no Xcode and no
+# Darwin SDK of your own. Run it from the Actions tab — the GitHub app on an iPhone can do that — and download the
+# artifact, then install it with an on-device signer.
+#
+# The build is unsigned unless the signing secrets are set, so a free Apple ID plus an on-device signer (Sideloadly,
+# AltStore, ESign) can install it. Set IOS_TEAM_ID, IOS_CERTIFICATE_P12, IOS_CERTIFICATE_PASSWORD and
+# IOS_PROVISIONING_PROFILE (the .p12 and .mobileprovision, base64-encoded) for a signed .ipa you can also open in
+# Xcode. The bundle id is fmc.shortcuts.ShortcutsWatch: the profile has to name it.
+name: Companion
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version stamped on the .ipa; defaults to the one in store.toml"
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "apps/webhook/companion/**"
+      - ".github/workflows/companion.yml"
+
+permissions:
+  contents: read
+
+env:
+  APP: apps/webhook/companion
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Report the toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Read the version
+        id: stamp
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        working-directory: ${{ env.APP }}
+        run: |
+          version="${INPUT_VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' ../store.toml)}"
+          # CFBundleShortVersionString is MAJOR.MINOR.PATCH with digits only, so `1.2.3-beta` stamps 1.2.3.
+          short="$(printf '%s' "$version" \
+            | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+          echo "short=${short:-0.1.0}" >> "$GITHUB_OUTPUT"
+
+      # The wire format, AES, CRC32 and the action plan are CoreBluetooth-free, so they are tested here too.
+      - name: Test the shared core
+        working-directory: ${{ env.APP }}
+        run: swift test
+
+      - name: Generate the Xcode project
+        working-directory: ${{ env.APP }}
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Stamp the version
+        working-directory: ${{ env.APP }}
+        env:
+          SHORT: ${{ steps.stamp.outputs.short }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          plutil -replace CFBundleShortVersionString -string "$SHORT" Info.plist
+          plutil -replace CFBundleVersion -string "$BUILD" Info.plist
+          plutil -p Info.plist
+
+      - name: Detect the signing identity
+        id: signing
+        env:
+          TEAM: ${{ secrets.IOS_TEAM_ID }}
+          P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          if [ -n "$TEAM" ] && [ -n "$P12" ] && [ -n "$PROFILE" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Unsigned build::No signing secrets, so the .ipa needs an on-device signer."
+          fi
+
+      - name: Build (unsigned)
+        if: steps.signing.outputs.signed != 'true'
+        working-directory: ${{ env.APP }}
+        run: |
+          xcodebuild build \
+            -project ShortcutsWatch.xcodeproj \
+            -scheme ShortcutsWatch \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/derived" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+      - name: Import the signing identity
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security default-keychain -s "$keychain"
+          printf '%s' "$P12" | tr -d '[:space:]' | openssl base64 -d -A > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+
+          # The profile has to sit under its UUID: that is how Xcode finds it, whatever the file was called locally.
+          printf '%s' "$PROFILE" | tr -d '[:space:]' | openssl base64 -d -A > "$RUNNER_TEMP/companion.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/companion.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          uuid="$(plutil -extract UUID raw -o - "$RUNNER_TEMP/profile.plist")"
+          name="$(plutil -extract Name raw -o - "$RUNNER_TEMP/profile.plist")"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/companion.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
+          echo "PROFILE_UUID=$uuid" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$name" >> "$GITHUB_ENV"
+          echo "Using profile '$name' ($uuid)"
+
+      - name: Build (signed)
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: ${{ env.APP }}
+        env:
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          xcodebuild archive \
+            -project ShortcutsWatch.xcodeproj \
+            -scheme ShortcutsWatch \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/ShortcutsWatch.xcarchive" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            PROVISIONING_PROFILE="$PROFILE_UUID" \
+            CODE_SIGN_IDENTITY="Apple Development"
+
+      - name: Package the .ipa
+        id: package
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SHORT: ${{ steps.stamp.outputs.short }}
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          # PROFILE_NAME comes from the import step's GITHUB_ENV, not from the workflow-level env block, which is
+          # resolved before that step runs.
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          if [ "$SIGNED" = "true" ]; then
+            plist="$RUNNER_TEMP/ExportOptions.plist"
+            {
+              echo '<?xml version="1.0" encoding="UTF-8"?>'
+              echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+              echo '<plist version="1.0">'
+              echo '<dict>'
+              echo '  <key>method</key><string>development</string>'
+              echo "  <key>teamID</key><string>$TEAM_ID</string>"
+              echo '  <key>signingStyle</key><string>manual</string>'
+              echo '  <key>provisioningProfiles</key>'
+              echo '  <dict>'
+              echo "    <key>fmc.shortcuts.ShortcutsWatch</key><string>$PROFILE_NAME</string>"
+              echo '  </dict>'
+              echo '  <key>stripSwiftSymbols</key><true/>'
+              echo '</dict>'
+              echo '</plist>'
+            } > "$plist"
+            xcodebuild -exportArchive \
+              -archivePath "$RUNNER_TEMP/ShortcutsWatch.xcarchive" \
+              -exportOptionsPlist "$plist" \
+              -exportPath "$out"
+            ipa="$out/ShortcutsWatch.ipa"
+            [ -f "$ipa" ] || { echo "::error::xcodebuild produced no .ipa at $ipa"; ls -R "$out"; exit 1; }
+          else
+            # An unsigned .ipa is just a Payload/ folder zipped; an on-device signer installs it from there.
+            app="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/ShortcutsWatch.app"
+            [ -d "$app" ] || { echo "::error::no .app at $app"; ls -R "$RUNNER_TEMP/derived/Build/Products" || true; exit 1; }
+            mkdir -p "$out/Payload"
+            cp -R "$app" "$out/Payload/"
+            ( cd "$out" && zip -qry "Shortcuts-unsigned.ipa" Payload )
+            ipa="$out/Shortcuts-unsigned.ipa"
+          fi
+          final="$out/Shortcuts-$SHORT.ipa"
+          mv "$ipa" "$final"
+          [ -s "$final" ] || { echo "::error::$final is empty"; exit 1; }
+          unzip -l "$final" | head -20
+          echo "ipa=$final" >> "$GITHUB_OUTPUT"
+          echo "signed=$SIGNED" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the .ipa to the run
+        env:
+          SIGNED: ${{ steps.package.outputs.signed }}
+        run: |
+          {
+            echo "### Shortcuts companion ${{ steps.stamp.outputs.short }}"
+            echo
+            if [ "$SIGNED" = "true" ]; then
+              echo "Signed .ipa; install it from Files or with Xcode."
+            else
+              echo "**Unsigned** .ipa: sign it on the phone with Sideloadly, AltStore or ESign and a free Apple ID."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Shortcuts-${{ steps.stamp.outputs.short }}
+          path: ${{ steps.package.outputs.ipa }}
+          if-no-files-found: error

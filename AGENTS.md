@@ -90,7 +90,8 @@ bind, no "Paired" popup, Nothing X keeps working. What exists today:
 
 - The watch needs the stub with K (`fw-wp2.bin` from 2026-11-13 or later, by OTA) and a loader from 2026-11-13 or
   later. Stock firmware has no channel at all.
-- Host implementations: Python (`wp2apps.channel.Channel(channel_key=True)`, Mac) and an iOS one in a private app.
+- Host implementations: Python (`wp2apps.channel.Channel(channel_key=True)`, Mac) and Swift for iOS
+  (`apps/webhook/companion`, built into an `.ipa` by `.github/workflows/companion.yml` on a GitHub macOS runner).
   There is no Android host yet; `connectGatt` next to Nothing X is untested.
 - A Mac and a phone can't both be connected: the watch takes one central.
 

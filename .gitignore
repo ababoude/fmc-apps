@@ -2,3 +2,7 @@
 /.sdk/
 /runs/
 .DS_Store
+# the companion's `swift test`, XcodeGen and xtool output
+.build/
+*.xcodeproj
+xtool/
