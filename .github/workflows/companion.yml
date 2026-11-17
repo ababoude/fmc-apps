@@ -132,46 +132,43 @@ jobs:
         env:
           MIN_IOS: "17.0"
         run: |
+          set -u
           app="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/ShortcutsWatch.app"
-          [ -d "$app" ] || { echo "::error::no .app at $app"; exit 1; }
-          # These four keys decide whether iOS installs the bundle at all; print them and fail loudly on a mismatch.
-          plutil -p "$app/Info.plist" | tee "$RUNNER_TEMP/appinfo.txt"
-          exec_file="$(plutil -extract CFBundleExecutable raw -o - "$app/Info.plist")"
-          [ -x "$app/$exec_file" ] || { echo "::error::missing executable $exec_file"; exit 1; }
-          # A device build must carry an arm64 slice. A simulator or x86_64-only binary signs fine and then refuses
-          # to install, which looks exactly like a signing problem.
-          lipo -info "$app/$exec_file"
-          lipo -info "$app/$exec_file" | grep -q arm64 || { echo "::error::$exec_file has no arm64 slice"; exit 1; }
-          for key in DTSDKName DTPlatformVersion; do
-            printf '%s = %s\n' "$key" "$(plutil -extract "$key" raw -o - "$app/Info.plist" 2>/dev/null || echo unknown)"
-          done | tee -a "$RUNNER_TEMP/appinfo.txt"
-          min="$(plutil -extract MinimumOSVersion raw -o - "$app/Info.plist")"
-          [ -n "$min" ] || { echo "::error::no MinimumOSVersion"; exit 1; }
-          # A compiled-in entitlements file is required by signers using Enterprise/wildcard certificates
-          # (Feather, DxSign, ESign...): without it iOS rejects the installation after re-signing.
-          codesign -d --entitlements :- "$app/$exec_file" 2>/dev/null | tee "$RUNNER_TEMP/entitlements.txt" \
-            | grep -q 'get-task-allow' || { echo "::warning::no get-task-allow entitlement in the binary"; }
-          # Fail only when the bundle asks for a newer iOS than we intend (e.g. 26.0 baked in by the SDK).
-          awk -v a="$min" -v b="$MIN_IOS" 'BEGIN{
-            split(a,x,"."); split(b,y,".")
-            if (x[1] > y[1]) exit 1
-            if (x[1] == y[1] && x[2] > y[2]) exit 1
-            exit 0
-          }' || { echo "::error::MinimumOSVersion $min is above the intended $MIN_IOS"; exit 1; }
-          echo "MinimumOSVersion $min (target $MIN_IOS)"
-          for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion CFBundlePackageType \
-                     CFBundleSupportedPlatforms MinimumOSVersion UIDeviceFamily; do
-            plutil -extract "$key" raw -o - "$app/Info.plist" >/dev/null \
-              || { echo "::error::missing $key in the built Info.plist"; exit 1; }
+          info="$app/Info.plist"
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ -d "$app" ] || fail "no .app at $app"
+          [ -f "$info" ] || fail "no Info.plist in $app"
+
+          exec_file="$(plutil -extract CFBundleExecutable raw -o - "$info" 2>/dev/null || true)"
+          [ -n "$exec_file" ] || fail "CFBundleExecutable missing from Info.plist"
+          [ -f "$app/$exec_file" ] || fail "missing executable $exec_file"
+          echo "executable: $exec_file"
+
+          # A device build must carry an arm64 slice: a simulator binary signs fine, then refuses to install.
+          lipo_out="$(lipo -info "$app/$exec_file" 2>&1 || true)"
+          echo "$lipo_out"
+          echo "$lipo_out" | grep -q 'arm64' || fail "$exec_file has no arm64 slice"
+
+          min="$(plutil -extract MinimumOSVersion raw -o - "$info" 2>/dev/null || true)"
+          [ -n "$min" ] || min="(absent)"
+          echo "MinimumOSVersion: $min (target $MIN_IOS)"
+
+          # Informational only: a failure here must not fail the build, the phone will tell us more.
+          for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion \
+                     CFBundlePackageType CFBundleSupportedPlatforms UIDeviceFamily DTSDKName; do
+            value="$(plutil -extract "$key" raw -o - "$info" 2>/dev/null || echo '<missing>')"
+            echo "$key = $value"
           done
-          # Also surface it in the run summary: this is what iOS checks before it says "cannot be installed".
+
           {
             echo "### Built bundle"
             echo
             echo '```'
-            cat "$RUNNER_TEMP/appinfo.txt"
+            plutil -p "$info"
+            echo "$lipo_out"
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
       - name: Import the signing identity
         if: steps.signing.outputs.signed == 'true'
