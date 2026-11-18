@@ -175,6 +175,8 @@ final class WatchLink: NSObject, ObservableObject {
 
     // MARK: - Link
 
+    private static let watchNamePrefixes = ["cmf watch", "nothing watch", "cmf watch pro"]
+
     private func findWatch(_ central: CBCentralManager) {
         // Nothing X holds the link; ask for that peripheral rather than competing with it.
         let connected = central.retrieveConnectedPeripherals(withServices: [Self.commandService])
@@ -182,14 +184,31 @@ final class WatchLink: NSObject, ObservableObject {
             connect(watch, central)
             return
         }
+        // Do not filter the scan by FFF0: the watch does not advertise that service reliably, and CoreBluetooth
+        // then never reports it. The Python host scans all peripherals and matches on the name; do the same.
         state = .scanning
-        central.scanForPeripherals(withServices: [Self.commandService], options: nil)
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+    }
+
+    private func isWatch(_ peripheral: CBPeripheral, advertisementData: [String: Any]) -> Bool {
+        let local = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+        let name = local ?? peripheral.name ?? ""
+        let lowered = name.lowercased()
+        return Self.watchNamePrefixes.contains { lowered.contains($0) }
     }
 
     private func connect(_ watch: CBPeripheral, _ central: CBCentralManager) {
         state = .connecting
         watchName = watch.name
-        central.connect(watch, options: nil)
+        // A peripheral from `retrieveConnectedPeripherals` is already connected: `didConnect` never fires, so set up
+        // the delegate and discover here. Otherwise `didConnect` does it.
+        if watch.state == .connected {
+            self.peripheral = watch
+            watch.delegate = self
+            watch.discoverServices([Self.commandService, Self.shellService])
+        } else {
+            central.connect(watch, options: nil)
+        }
     }
 
     private func readSecret() {
@@ -301,6 +320,8 @@ extension WatchLink: CBCentralManagerDelegate {
     ) {
         Task { @MainActor in
             guard self.wantsConnection else { return }
+            // Scanning unfiltered reports every BLE device: connect only to a watch, not a random peripheral.
+            guard self.isWatch(peripheral, advertisementData: advertisementData) else { return }
             central.stopScan()
             self.connect(peripheral, central)
         }
@@ -354,6 +375,20 @@ extension WatchLink: CBCentralManagerDelegate {
 // MARK: - CBPeripheralDelegate
 
 extension WatchLink: CBPeripheralDelegate {
+    /// CoreBluetooth calls this after `discoverServices`; without it `discoverCharacteristics` is never issued and
+    /// the write/notify characteristics stay unknown, so the link never starts (the two sides "don't see" each other).
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        Task { @MainActor in
+            guard let services = peripheral.services, error == nil else {
+                self.state = .failed("Could not discover the watch's services")
+                return
+            }
+            for service in services where [Self.commandService, Self.shellService].contains(service.uuid) {
+                peripheral.discoverCharacteristics(nil, for: service)
+            }
+        }
+    }
+
     nonisolated func peripheral(
         _ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?
     ) {

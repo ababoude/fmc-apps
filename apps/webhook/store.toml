@@ -1,7 +1,7 @@
 # The app's listing in the FMC store (README.md, "store.toml"). The page's body is store.md.
 name = "Shortcuts"
 summary = "Tap a row to run a Shortcut or call your webhook"
-version = "0.1.0"
+version = "0.1.1"
 author = "OpenHands"
 published = false
 screenshots = ["shots/list.png", "shots/sent.png"]
